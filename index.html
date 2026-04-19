@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Simple Voice Agent</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <button id="micButton" class="mic" aria-label="Start recording">
+        <span class="mic-icon" aria-hidden="true">&#127908;</span>
+      </button>
+
+      <p id="status" class="status">Live mode OFF. Tap mic to start</p>
+
+      <section class="result">
+        <p><strong>You:</strong> <span id="userText">-</span></p>
+        <p><strong>Agent:</strong> <span id="botText">-</span></p>
+      </section>
+
+      <section class="latency-card" aria-live="polite">
+        <h3>Latency</h3>
+        <div class="latency-row">
+          <span>Transcribe (<span id="latencySttModel">-</span>)</span>
+          <strong id="latencySttMs">-</strong>
+        </div>
+        <div class="latency-row">
+          <span>LLM (<span id="latencyLlmModel">-</span>)</span>
+          <strong id="latencyLlmMs">-</strong>
+        </div>
+        <div class="latency-row">
+          <span>TTS (<span id="latencyTtsModel">-</span>)</span>
+          <strong id="latencyTtsMs">-</strong>
+        </div>
+        <div class="latency-row total">
+          <span>Total</span>
+          <strong id="latencyTotalMs">-</strong>
+        </div>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>

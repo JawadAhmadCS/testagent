@@ -1,0 +1,133 @@
+:root {
+  --bg-1: #0b1020;
+  --bg-2: #16213b;
+  --accent: #35d0ba;
+  --accent-active: #ff6b6b;
+  --text: #f4f7ff;
+  --muted: #b8c2de;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  color: var(--text);
+  background: radial-gradient(circle at 25% 20%, #22345f 0%, var(--bg-1) 40%),
+    linear-gradient(135deg, var(--bg-1), var(--bg-2));
+}
+
+.app {
+  width: min(92vw, 560px);
+  text-align: center;
+  padding: 24px;
+}
+
+.mic {
+  width: 120px;
+  height: 120px;
+  border: none;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #04121a;
+  font-size: 44px;
+  cursor: pointer;
+  box-shadow: 0 14px 45px rgba(53, 208, 186, 0.35);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.mic:hover {
+  transform: translateY(-2px) scale(1.02);
+}
+
+.mic.recording {
+  background: var(--accent-active);
+  color: #fff;
+  animation: pulse 1.2s infinite;
+  box-shadow: 0 0 0 0 rgba(255, 107, 107, 0.7);
+}
+
+@keyframes pulse {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(255, 107, 107, 0.7);
+  }
+  70% {
+    transform: scale(1.04);
+    box-shadow: 0 0 0 25px rgba(255, 107, 107, 0);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(255, 107, 107, 0);
+  }
+}
+
+.status {
+  margin-top: 18px;
+  color: var(--muted);
+  font-size: 1rem;
+}
+
+.result {
+  margin-top: 20px;
+  text-align: left;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  padding: 14px;
+}
+
+.result p {
+  margin: 8px 0;
+  line-height: 1.4;
+}
+
+.latency-card {
+  margin-top: 16px;
+  text-align: left;
+  background: rgba(6, 16, 34, 0.62);
+  border: 1px solid rgba(53, 208, 186, 0.35);
+  border-radius: 12px;
+  padding: 14px;
+}
+
+.latency-card h3 {
+  margin: 0 0 10px;
+  font-size: 0.98rem;
+  color: #c7fff6;
+}
+
+.latency-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 7px 0;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.latency-row strong {
+  color: #f7fdff;
+  font-variant-numeric: tabular-nums;
+}
+
+.latency-row.total {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.18);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+@media (max-width: 480px) {
+  .mic {
+    width: 96px;
+    height: 96px;
+    font-size: 36px;
+  }
+}
