@@ -2,6 +2,8 @@ const micButton = document.getElementById("micButton");
 const statusEl = document.getElementById("status");
 const userTextEl = document.getElementById("userText");
 const botTextEl = document.getElementById("botText");
+const languageSelectEl = document.getElementById("languageSelect");
+const languageHintEl = document.getElementById("languageHint");
 const latencySttModelEl = document.getElementById("latencySttModel");
 const latencyLlmModelEl = document.getElementById("latencyLlmModel");
 const latencyTtsModelEl = document.getElementById("latencyTtsModel");
@@ -19,6 +21,21 @@ const NO_SPEECH_STOP_MS = 2500;
 const MAX_RECORD_MS = 7000;
 const SILENCE_THRESHOLD = 0.015;
 const BROWSER_TTS_RATE = 1.14;
+const DEFAULT_LANGUAGE = "en";
+const LANGUAGE_CONFIG = {
+  en: {
+    uiLabel: "English",
+    sttCode: "en",
+    speechSynthesisLang: "en-US",
+    ttsModelLabel: "browser-speechSynthesis(en-US)",
+  },
+  he: {
+    uiLabel: "Hebrew",
+    sttCode: "he",
+    speechSynthesisLang: "he-IL",
+    ttsModelLabel: "browser-speechSynthesis(he-IL)",
+  },
+};
 
 let mediaStream = null;
 let mediaRecorder = null;
@@ -28,6 +45,7 @@ let isProcessing = false;
 let sessionActive = false;
 let activeAudio = null;
 let activeUtterance = null;
+let sessionLanguage = DEFAULT_LANGUAGE;
 
 let silenceIntervalId = null;
 let maxRecordTimerId = null;
@@ -41,6 +59,26 @@ let sourceNode = null;
 
 const conversation = [];
 
+function getLanguageConfig(languageKey) {
+  return LANGUAGE_CONFIG[languageKey] || LANGUAGE_CONFIG[DEFAULT_LANGUAGE];
+}
+
+function getSelectedLanguageKey() {
+  const key = languageSelectEl?.value || DEFAULT_LANGUAGE;
+  return LANGUAGE_CONFIG[key] ? key : DEFAULT_LANGUAGE;
+}
+
+function setLanguageLock(locked) {
+  if (languageSelectEl) {
+    languageSelectEl.disabled = locked;
+  }
+  if (languageHintEl) {
+    languageHintEl.textContent = locked
+      ? `Language locked to ${getLanguageConfig(sessionLanguage).uiLabel} for this live session.`
+      : "Language locks for current live session.";
+  }
+}
+
 function formatMs(value) {
   if (typeof value !== "number" || Number.isNaN(value)) return "-";
   return `${Math.max(0, Math.round(value))} ms`;
@@ -49,16 +87,24 @@ function formatMs(value) {
 function updateLatencyCard(data) {
   const timings = data?.timings || {};
   const models = data?.models || {};
+  const languageCfg = getLanguageConfig(sessionLanguage);
 
   latencySttModelEl.textContent = models.transcribe || "-";
   latencyLlmModelEl.textContent = models.llm || "-";
   latencyTtsModelEl.textContent =
-    models.tts || (ULTRA_FAST_MODE || data?.fastTts ? "browser-speechSynthesis" : "-");
+    models.tts || (ULTRA_FAST_MODE || data?.fastTts ? languageCfg.ttsModelLabel : "-");
 
   latencySttMsEl.textContent = formatMs(timings.transcribeMs);
   latencyLlmMsEl.textContent = formatMs(timings.llmMs);
   latencyTtsMsEl.textContent = formatMs(timings.ttsMs);
   latencyTotalMsEl.textContent = formatMs(timings.totalMs);
+}
+
+function resetForNewConversation() {
+  conversation.length = 0;
+  userTextEl.textContent = "-";
+  botTextEl.textContent = "-";
+  updateLatencyCard(null);
 }
 
 function updateStatus(text) {
@@ -181,6 +227,7 @@ async function ensureAudioReady() {
         formData.append("audio", audioBlob, "speech.webm");
         formData.append("history", JSON.stringify(conversation));
         formData.append("fast", ULTRA_FAST_MODE ? "1" : "0");
+        formData.append("language", getLanguageConfig(sessionLanguage).sttCode);
 
         const response = await fetch(`${API_BASE}/api/voice`, {
           method: "POST",
@@ -314,18 +361,19 @@ function stopPlaybackIfAny() {
   activeAudio = null;
 }
 
-async function speakWithBrowser(text) {
+async function speakWithBrowser(text, languageKey) {
   if (!text) return;
   if (!("speechSynthesis" in window)) return;
 
   stopPlaybackIfAny();
   updateStatus("Speaking...");
+  const languageCfg = getLanguageConfig(languageKey);
 
   await new Promise((resolve) => {
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.rate = BROWSER_TTS_RATE;
     utterance.pitch = 1;
-    utterance.lang = "en-US";
+    utterance.lang = languageCfg.speechSynthesisLang;
     utterance.onend = resolve;
     utterance.onerror = resolve;
     activeUtterance = utterance;
@@ -358,7 +406,7 @@ async function playAssistantAudio(audioBase64, audioMime) {
 async function speakAssistantResponse(data) {
   const preferBrowser = ULTRA_FAST_MODE || data.fastTts || !data.audioBase64;
   if (preferBrowser) {
-    await speakWithBrowser(data.reply || "");
+    await speakWithBrowser(data.reply || "", sessionLanguage);
     return;
   }
   await playAssistantAudio(data.audioBase64, data.audioMime || "audio/mp3");
@@ -372,9 +420,11 @@ async function startSession() {
     // Ignore warm-up failures; main loop will surface errors.
   }
 
+  sessionLanguage = getSelectedLanguageKey();
   sessionActive = true;
+  setLanguageLock(true);
   micButton.classList.add("recording");
-  updateStatus("Live mode ON (fast). Speak naturally...");
+  updateStatus(`Live mode ON (${getLanguageConfig(sessionLanguage).uiLabel}). Speak naturally...`);
   await startListeningTurn();
 }
 
@@ -384,6 +434,7 @@ function stopSession() {
   stopCurrentRecording();
   stopPlaybackIfAny();
   micButton.classList.remove("recording");
+  setLanguageLock(false);
   updateStatus("Live mode OFF. Tap mic to start");
 }
 
@@ -405,5 +456,22 @@ async function toggleSession() {
     stopSession();
   }
 }
+
+if (languageSelectEl) {
+  languageSelectEl.value = getSelectedLanguageKey();
+  languageSelectEl.addEventListener("change", () => {
+    if (sessionActive) {
+      languageSelectEl.value = sessionLanguage;
+      return;
+    }
+    sessionLanguage = getSelectedLanguageKey();
+    resetForNewConversation();
+    updateStatus(`Language set to ${getLanguageConfig(sessionLanguage).uiLabel}. Tap mic to start.`);
+  });
+}
+
+sessionLanguage = getSelectedLanguageKey();
+setLanguageLock(false);
+updateLatencyCard(null);
 
 micButton.addEventListener("click", toggleSession);

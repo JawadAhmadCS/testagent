@@ -8,6 +8,15 @@
   </head>
   <body>
     <main class="app">
+      <section class="language-panel">
+        <label for="languageSelect">Conversation Language</label>
+        <select id="languageSelect" aria-label="Select conversation language">
+          <option value="en" selected>English</option>
+          <option value="he">Hebrew</option>
+        </select>
+        <small id="languageHint">Language locks for current live session.</small>
+      </section>
+
       <button id="micButton" class="mic" aria-label="Start recording">
         <span class="mic-icon" aria-hidden="true">&#127908;</span>
       </button>
