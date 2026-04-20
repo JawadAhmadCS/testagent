@@ -22,6 +22,7 @@ const MAX_RECORD_MS = 7000;
 const SILENCE_THRESHOLD = 0.015;
 const BROWSER_TTS_RATE = 1.14;
 const DEFAULT_LANGUAGE = "en";
+const SERVER_TTS_LANGUAGES = new Set(["he"]);
 const LANGUAGE_CONFIG = {
   en: {
     uiLabel: "English",
@@ -116,6 +117,10 @@ function appendHistory(role, content) {
   while (conversation.length > MAX_HISTORY_MESSAGES) {
     conversation.shift();
   }
+}
+
+function shouldPreferServerTts(languageKey) {
+  return SERVER_TTS_LANGUAGES.has(languageKey);
 }
 
 function getSupportedMimeType() {
@@ -226,7 +231,8 @@ async function ensureAudioReady() {
         const formData = new FormData();
         formData.append("audio", audioBlob, "speech.webm");
         formData.append("history", JSON.stringify(conversation));
-        formData.append("fast", ULTRA_FAST_MODE ? "1" : "0");
+        const shouldUseFast = ULTRA_FAST_MODE && !shouldPreferServerTts(sessionLanguage);
+        formData.append("fast", shouldUseFast ? "1" : "0");
         formData.append("language", getLanguageConfig(sessionLanguage).sttCode);
 
         const response = await fetch(`${API_BASE}/api/voice`, {
@@ -404,7 +410,10 @@ async function playAssistantAudio(audioBase64, audioMime) {
 }
 
 async function speakAssistantResponse(data) {
-  const preferBrowser = ULTRA_FAST_MODE || data.fastTts || !data.audioBase64;
+  const preferBrowser =
+    (!shouldPreferServerTts(sessionLanguage) && ULTRA_FAST_MODE) ||
+    data.fastTts ||
+    !data.audioBase64;
   if (preferBrowser) {
     await speakWithBrowser(data.reply || "", sessionLanguage);
     return;

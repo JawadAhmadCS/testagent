@@ -49,7 +49,7 @@ const GOOGLE_CREDENTIALS = resolveGoogleCredentialsFromEnv();
 const GOOGLE_AUTH_SOURCE = GOOGLE_CREDENTIALS ? "env-inline" : "google-application-credentials";
 const GOOGLE_CLOUD_PROJECT_ID = process.env.GOOGLE_CLOUD_PROJECT_ID || GOOGLE_CREDENTIALS?.project_id;
 const CHIRP_VOICE_EN = process.env.CHIRP_VOICE_EN || process.env.CHIRP_VOICE || "en-US-Chirp3-HD-Kore";
-const CHIRP_VOICE_HE = process.env.CHIRP_VOICE_HE || "";
+const CHIRP_VOICE_HE = process.env.CHIRP_VOICE_HE || "he-IL-Wavenet-C";
 const GOOGLE_TTS_ENDPOINT =
   process.env.GOOGLE_TTS_ENDPOINT || "https://texttospeech.googleapis.com/v1/text:synthesize";
 const TRANSCRIBE_MODEL = process.env.TRANSCRIBE_MODEL || "gpt-4o-transcribe";
@@ -409,7 +409,8 @@ app.post("/api/voice", upload.single("audio"), async (req, res) => {
       }
     }
 
-    const preferFast = req.body?.fast === "1" || FAST_RESPONSE_MODE;
+    const fastParam = typeof req.body?.fast === "string" ? req.body.fast.trim() : "";
+    const preferFast = fastParam === "1" ? true : fastParam === "0" ? false : FAST_RESPONSE_MODE;
     const llmModelUsed = preferFast ? FAST_LLM_MODEL : DEFAULT_LLM_MODEL;
     const chirpAvailable = Boolean(languageConfig.chirpVoice);
 
@@ -421,13 +422,25 @@ app.post("/api/voice", upload.single("audio"), async (req, res) => {
     let audioMime = null;
     let ttsMs = 0;
     let fastTts = preferFast || !chirpAvailable;
-    const ttsModelUsed = fastTts ? null : languageConfig.chirpVoice;
+    let ttsModelUsed = fastTts ? null : languageConfig.chirpVoice;
 
     if (!fastTts) {
-      const ttsStart = performance.now();
-      audioBase64 = await synthesizeWithGoogleChirp(reply, languageConfig);
-      ttsMs = Math.round(performance.now() - ttsStart);
-      audioMime = "audio/mp3";
+      try {
+        const ttsStart = performance.now();
+        audioBase64 = await synthesizeWithGoogleChirp(reply, languageConfig);
+        ttsMs = Math.round(performance.now() - ttsStart);
+        audioMime = "audio/mp3";
+      } catch (ttsError) {
+        logError("Google TTS synth failed. Falling back to browser TTS.", ttsError, {
+          language: languageKey,
+          configuredVoice: languageConfig.chirpVoice,
+        });
+        fastTts = true;
+        ttsModelUsed = null;
+        audioBase64 = null;
+        audioMime = null;
+        ttsMs = 0;
+      }
     }
 
     const totalMs = Math.round(performance.now() - totalStart);
