@@ -4,6 +4,8 @@ const userTextEl = document.getElementById("userText");
 const botTextEl = document.getElementById("botText");
 const languageSelectEl = document.getElementById("languageSelect");
 const languageHintEl = document.getElementById("languageHint");
+const voiceSelectEl = document.getElementById("voiceSelect");
+const voiceHintEl = document.getElementById("voiceHint");
 const latencySttModelEl = document.getElementById("latencySttModel");
 const latencyLlmModelEl = document.getElementById("latencyLlmModel");
 const latencyTtsModelEl = document.getElementById("latencyTtsModel");
@@ -22,6 +24,53 @@ const MAX_RECORD_MS = 7000;
 const SILENCE_THRESHOLD = 0.015;
 const BROWSER_TTS_RATE = 1.14;
 const DEFAULT_LANGUAGE = "en";
+const DEFAULT_ENGLISH_VOICE = "en-US-Chirp3-HD-Kore";
+const CHIRP3_HD_VOICE_GROUPS_EN = {
+  female: [
+    "Achernar",
+    "Aoede",
+    "Autonoe",
+    "Callirrhoe",
+    "Despina",
+    "Erinome",
+    "Gacrux",
+    "Kore",
+    "Laomedeia",
+    "Leda",
+    "Pulcherrima",
+    "Sulafat",
+    "Vindemiatrix",
+    "Zephyr",
+  ],
+  male: [
+    "Achird",
+    "Algenib",
+    "Algieba",
+    "Alnilam",
+    "Charon",
+    "Enceladus",
+    "Fenrir",
+    "Iapetus",
+    "Orus",
+    "Puck",
+    "Rasalgethi",
+    "Sadachbia",
+    "Sadaltager",
+    "Schedar",
+    "Umbriel",
+    "Zubenelgenubi",
+  ],
+};
+const CHIRP3_HD_POPULAR_EN = new Set([
+  "Aoede",
+  "Kore",
+  "Leda",
+  "Zephyr",
+  "Charon",
+  "Fenrir",
+  "Orus",
+  "Puck",
+]);
 const SERVER_TTS_LANGUAGES = new Set(["he"]);
 const LANGUAGE_CONFIG = {
   en: {
@@ -47,6 +96,8 @@ let sessionActive = false;
 let activeAudio = null;
 let activeUtterance = null;
 let sessionLanguage = DEFAULT_LANGUAGE;
+let voiceCatalog = null;
+const selectedVoiceByLanguage = {};
 
 let silenceIntervalId = null;
 let maxRecordTimerId = null;
@@ -67,6 +118,144 @@ function getLanguageConfig(languageKey) {
 function getSelectedLanguageKey() {
   const key = languageSelectEl?.value || DEFAULT_LANGUAGE;
   return LANGUAGE_CONFIG[key] ? key : DEFAULT_LANGUAGE;
+}
+
+function buildFallbackVoiceCatalog() {
+  const voicesEn = Object.entries(CHIRP3_HD_VOICE_GROUPS_EN).flatMap(([gender, names]) =>
+    names.map((name) => ({
+      id: `en-US-Chirp3-HD-${name}`,
+      name,
+      gender,
+      popular: CHIRP3_HD_POPULAR_EN.has(name),
+    }))
+  );
+
+  return {
+    en: {
+      key: "en",
+      label: "English",
+      defaultVoice: DEFAULT_ENGLISH_VOICE,
+      voices: voicesEn,
+    },
+    he: {
+      key: "he",
+      label: "Hebrew",
+      defaultVoice: "",
+      voices: [],
+    },
+  };
+}
+
+function getVoiceConfig(languageKey) {
+  if (!voiceCatalog) {
+    voiceCatalog = buildFallbackVoiceCatalog();
+  }
+  return voiceCatalog[languageKey] || { voices: [], defaultVoice: "" };
+}
+
+function setVoiceHint(languageKey) {
+  if (!voiceHintEl) return;
+  if (languageKey === "en") {
+    const selectedVoice = selectedVoiceByLanguage.en;
+    if (selectedVoice) {
+      const shortName = selectedVoice.replace("en-US-Chirp3-HD-", "");
+      voiceHintEl.textContent = `Voice: ${shortName}. Change anytime to compare tone on the next reply.`;
+      return;
+    }
+    voiceHintEl.textContent = "Select a Google Chirp 3 HD voice for tone testing.";
+    return;
+  }
+  voiceHintEl.textContent = "Chirp 3 HD list is enabled for English voice testing.";
+}
+
+function getSelectedVoice(languageKey) {
+  if (languageKey === "en") {
+    return selectedVoiceByLanguage.en || "";
+  }
+  return selectedVoiceByLanguage[languageKey] || "";
+}
+
+function shouldPreferServerTts(languageKey) {
+  if (SERVER_TTS_LANGUAGES.has(languageKey)) return true;
+  return Boolean(getSelectedVoice(languageKey));
+}
+
+function createVoiceOptionElement(voice) {
+  const option = document.createElement("option");
+  option.value = voice.id;
+  const popularTag = voice.popular ? " (popular)" : "";
+  option.textContent = `${voice.name}${popularTag}`;
+  return option;
+}
+
+function populateVoiceSelect(languageKey) {
+  if (!voiceSelectEl) return;
+
+  const voiceCfg = getVoiceConfig(languageKey);
+  const voices = Array.isArray(voiceCfg.voices) ? voiceCfg.voices : [];
+
+  voiceSelectEl.innerHTML = "";
+
+  if (languageKey !== "en" || voices.length === 0) {
+    voiceSelectEl.disabled = true;
+    const noneOption = document.createElement("option");
+    noneOption.value = "";
+    noneOption.textContent = "No Chirp list for this language";
+    voiceSelectEl.appendChild(noneOption);
+    setVoiceHint(languageKey);
+    return;
+  }
+
+  voiceSelectEl.disabled = false;
+
+  let preferredVoice = selectedVoiceByLanguage[languageKey] || voiceCfg.defaultVoice || "";
+  const voicesById = new Map(voices.map((voice) => [voice.id, voice]));
+  if (!voicesById.has(preferredVoice)) {
+    preferredVoice = voicesById.has(DEFAULT_ENGLISH_VOICE)
+      ? DEFAULT_ENGLISH_VOICE
+      : voices[0]?.id || "";
+  }
+  selectedVoiceByLanguage[languageKey] = preferredVoice;
+
+  const femaleVoices = voices.filter((voice) => voice.gender === "female");
+  const maleVoices = voices.filter((voice) => voice.gender === "male");
+
+  const groups = [
+    { label: "Female", list: femaleVoices },
+    { label: "Male", list: maleVoices },
+  ];
+
+  groups.forEach(({ label, list }) => {
+    if (list.length === 0) return;
+    const group = document.createElement("optgroup");
+    group.label = label;
+    list.forEach((voice) => {
+      group.appendChild(createVoiceOptionElement(voice));
+    });
+    voiceSelectEl.appendChild(group);
+  });
+
+  voiceSelectEl.value = preferredVoice;
+  setVoiceHint(languageKey);
+}
+
+async function loadVoiceCatalog() {
+  try {
+    const response = await fetch(`${API_BASE}/api/voices`, { cache: "no-store" });
+    const data = await parseJsonFromResponse(response);
+    if (response.ok && data?.languages) {
+      voiceCatalog = data.languages;
+      return;
+    }
+  } catch (error) {
+    await reportClientError({
+      source: "load-voice-catalog",
+      message: error.message,
+      stack: error.stack || null,
+    });
+  }
+
+  voiceCatalog = buildFallbackVoiceCatalog();
 }
 
 function setLanguageLock(locked) {
@@ -117,10 +306,6 @@ function appendHistory(role, content) {
   while (conversation.length > MAX_HISTORY_MESSAGES) {
     conversation.shift();
   }
-}
-
-function shouldPreferServerTts(languageKey) {
-  return SERVER_TTS_LANGUAGES.has(languageKey);
 }
 
 function getSupportedMimeType() {
@@ -234,6 +419,10 @@ async function ensureAudioReady() {
         const shouldUseFast = ULTRA_FAST_MODE && !shouldPreferServerTts(sessionLanguage);
         formData.append("fast", shouldUseFast ? "1" : "0");
         formData.append("language", getLanguageConfig(sessionLanguage).sttCode);
+        const selectedVoice = getSelectedVoice(sessionLanguage);
+        if (selectedVoice) {
+          formData.append("voice", selectedVoice);
+        }
 
         const response = await fetch(`${API_BASE}/api/voice`, {
           method: "POST",
@@ -474,13 +663,31 @@ if (languageSelectEl) {
       return;
     }
     sessionLanguage = getSelectedLanguageKey();
+    populateVoiceSelect(sessionLanguage);
     resetForNewConversation();
     updateStatus(`Language set to ${getLanguageConfig(sessionLanguage).uiLabel}. Tap mic to start.`);
   });
 }
 
+if (voiceSelectEl) {
+  voiceSelectEl.addEventListener("change", () => {
+    const languageKey = sessionLanguage || getSelectedLanguageKey();
+    selectedVoiceByLanguage[languageKey] = voiceSelectEl.value;
+    setVoiceHint(languageKey);
+    if (languageKey === "en") {
+      updateStatus("Voice updated. Next response will use the selected Chirp 3 HD voice.");
+    }
+  });
+}
+
+async function initializeVoiceSelector() {
+  await loadVoiceCatalog();
+  populateVoiceSelect(sessionLanguage);
+}
+
 sessionLanguage = getSelectedLanguageKey();
 setLanguageLock(false);
 updateLatencyCard(null);
+initializeVoiceSelector();
 
 micButton.addEventListener("click", toggleSession);
