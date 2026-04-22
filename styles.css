@@ -28,7 +28,8 @@ body {
   padding: 24px;
 }
 
-.language-panel {
+.language-panel,
+.voice-panel {
   margin-bottom: 14px;
   text-align: left;
   background: rgba(255, 255, 255, 0.09);
@@ -37,14 +38,16 @@ body {
   padding: 10px 12px;
 }
 
-.language-panel label {
+.language-panel label,
+.voice-panel label {
   display: block;
   font-size: 0.86rem;
   color: var(--muted);
   margin-bottom: 6px;
 }
 
-.language-panel select {
+.language-panel select,
+.voice-panel select {
   width: 100%;
   border: 1px solid rgba(255, 255, 255, 0.24);
   background: rgba(6, 15, 34, 0.85);
@@ -55,12 +58,14 @@ body {
   outline: none;
 }
 
-.language-panel select:disabled {
+.language-panel select:disabled,
+.voice-panel select:disabled {
   opacity: 0.7;
   cursor: not-allowed;
 }
 
-.language-panel small {
+.language-panel small,
+.voice-panel small {
   display: block;
   margin-top: 6px;
   color: var(--muted);

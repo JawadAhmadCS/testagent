@@ -60,6 +60,66 @@ const FAST_MAX_TOKENS = Number(process.env.FAST_MAX_TOKENS || 160);
 const DEFAULT_LANGUAGE = "en";
 const HEBREW_REGEX = /[\u0590-\u05FF]/g;
 const LATIN_REGEX = /[A-Za-z]/g;
+const CHIRP3_HD_VOICE_GROUPS_EN = {
+  female: [
+    "Achernar",
+    "Aoede",
+    "Autonoe",
+    "Callirrhoe",
+    "Despina",
+    "Erinome",
+    "Gacrux",
+    "Kore",
+    "Laomedeia",
+    "Leda",
+    "Pulcherrima",
+    "Sulafat",
+    "Vindemiatrix",
+    "Zephyr",
+  ],
+  male: [
+    "Achird",
+    "Algenib",
+    "Algieba",
+    "Alnilam",
+    "Charon",
+    "Enceladus",
+    "Fenrir",
+    "Iapetus",
+    "Orus",
+    "Puck",
+    "Rasalgethi",
+    "Sadachbia",
+    "Sadaltager",
+    "Schedar",
+    "Umbriel",
+    "Zubenelgenubi",
+  ],
+};
+const CHIRP3_HD_POPULAR_NAMES_EN = new Set([
+  "Aoede",
+  "Kore",
+  "Leda",
+  "Zephyr",
+  "Charon",
+  "Fenrir",
+  "Orus",
+  "Puck",
+]);
+const CHIRP3_HD_VOICES_EN = Object.entries(CHIRP3_HD_VOICE_GROUPS_EN).flatMap(
+  ([gender, names]) =>
+    names.map((name) => ({
+      id: `en-US-Chirp3-HD-${name}`,
+      name,
+      gender,
+      popular: CHIRP3_HD_POPULAR_NAMES_EN.has(name),
+    }))
+);
+const CHIRP3_HD_VOICE_ID_SET_EN = new Set(CHIRP3_HD_VOICES_EN.map((voice) => voice.id));
+const CHIRP3_HD_VOICE_NAME_TO_ID_EN = new Map(
+  CHIRP3_HD_VOICES_EN.map((voice) => [voice.name.toLowerCase(), voice.id])
+);
+
 const LANGUAGE_CONFIG = {
   en: {
     key: "en",
@@ -78,6 +138,28 @@ const LANGUAGE_CONFIG = {
     chirpVoice: CHIRP_VOICE_HE,
   },
 };
+
+function resolveRequestedChirpVoice(languageKey, requestedVoice, fallbackVoice) {
+  if (languageKey !== "en") {
+    return fallbackVoice;
+  }
+
+  const raw = typeof requestedVoice === "string" ? requestedVoice.trim() : "";
+  if (!raw) {
+    return fallbackVoice;
+  }
+
+  if (CHIRP3_HD_VOICE_ID_SET_EN.has(raw)) {
+    return raw;
+  }
+
+  const byName = CHIRP3_HD_VOICE_NAME_TO_ID_EN.get(raw.toLowerCase());
+  if (byName) {
+    return byName;
+  }
+
+  return fallbackVoice;
+}
 
 function logError(label, error, context = null) {
   console.error(`\n[${new Date().toISOString()}] ${label}`);
@@ -392,7 +474,7 @@ async function chatWithOpenAI(userText, historyInput, languageConfig, options = 
   return finalReply;
 }
 
-async function synthesizeWithGoogleChirp(text, languageConfig) {
+async function synthesizeWithGoogleChirp(text, languageConfig, voiceName) {
   const authOptions = {
     scopes: ["https://www.googleapis.com/auth/cloud-platform"],
   };
@@ -424,7 +506,7 @@ async function synthesizeWithGoogleChirp(text, languageConfig) {
       input: { text },
       voice: {
         languageCode: languageConfig.chirpLanguageCode,
-        name: languageConfig.chirpVoice,
+        name: voiceName || languageConfig.chirpVoice,
       },
       audioConfig: {
         audioEncoding: "MP3",
@@ -450,6 +532,28 @@ app.all("/api/client-error", (_req, res) => {
   return res.status(405).json({ error: "Method not allowed. Use POST /api/client-error." });
 });
 
+app.get("/api/voices", (_req, res) => {
+  return res.json({
+    languages: {
+      en: {
+        key: "en",
+        label: LANGUAGE_CONFIG.en.label,
+        defaultVoice: LANGUAGE_CONFIG.en.chirpVoice,
+        voices: CHIRP3_HD_VOICES_EN,
+      },
+      he: {
+        key: "he",
+        label: LANGUAGE_CONFIG.he.label,
+        defaultVoice: LANGUAGE_CONFIG.he.chirpVoice,
+        voices: [],
+      },
+    },
+  });
+});
+app.all("/api/voices", (_req, res) => {
+  return res.status(405).json({ error: "Method not allowed. Use GET /api/voices." });
+});
+
 app.post("/api/voice", upload.single("audio"), async (req, res) => {
   try {
     const totalStart = performance.now();
@@ -465,6 +569,12 @@ app.post("/api/voice", upload.single("audio"), async (req, res) => {
 
     const languageKey = resolveConversationLanguage(req.body?.language);
     const languageConfig = LANGUAGE_CONFIG[languageKey];
+    const requestedVoice = typeof req.body?.voice === "string" ? req.body.voice.trim() : "";
+    const selectedChirpVoice = resolveRequestedChirpVoice(
+      languageKey,
+      requestedVoice,
+      languageConfig.chirpVoice
+    );
 
     const transcribeStart = performance.now();
     const transcript = await transcribeWithOpenAI(req.file.buffer, req.file.mimetype, languageConfig);
@@ -485,7 +595,7 @@ app.post("/api/voice", upload.single("audio"), async (req, res) => {
     const fastParam = typeof req.body?.fast === "string" ? req.body.fast.trim() : "";
     const preferFast = fastParam === "1" ? true : fastParam === "0" ? false : FAST_RESPONSE_MODE;
     const llmModelUsed = preferFast ? FAST_LLM_MODEL : DEFAULT_LLM_MODEL;
-    const chirpAvailable = Boolean(languageConfig.chirpVoice);
+    const chirpAvailable = Boolean(selectedChirpVoice);
 
     const llmStart = performance.now();
     const reply = await chatWithOpenAI(transcript, history, languageConfig, { fast: preferFast });
@@ -495,18 +605,18 @@ app.post("/api/voice", upload.single("audio"), async (req, res) => {
     let audioMime = null;
     let ttsMs = 0;
     let fastTts = preferFast || !chirpAvailable;
-    let ttsModelUsed = fastTts ? null : languageConfig.chirpVoice;
+    let ttsModelUsed = fastTts ? null : selectedChirpVoice;
 
     if (!fastTts) {
       try {
         const ttsStart = performance.now();
-        audioBase64 = await synthesizeWithGoogleChirp(reply, languageConfig);
+        audioBase64 = await synthesizeWithGoogleChirp(reply, languageConfig, selectedChirpVoice);
         ttsMs = Math.round(performance.now() - ttsStart);
         audioMime = "audio/mp3";
       } catch (ttsError) {
         logError("Google TTS synth failed. Falling back to browser TTS.", ttsError, {
           language: languageKey,
-          configuredVoice: languageConfig.chirpVoice,
+          configuredVoice: selectedChirpVoice,
         });
         fastTts = true;
         ttsModelUsed = null;
