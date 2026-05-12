@@ -545,7 +545,14 @@ app.get("/api/voices", (_req, res) => {
         key: "he",
         label: LANGUAGE_CONFIG.he.label,
         defaultVoice: LANGUAGE_CONFIG.he.chirpVoice,
-        voices: [],
+        voices: [
+          {
+            id: LANGUAGE_CONFIG.he.chirpVoice,
+            name: LANGUAGE_CONFIG.he.chirpVoice,
+            gender: "default",
+            popular: false,
+          },
+        ],
       },
     },
   });

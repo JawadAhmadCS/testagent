@@ -4,6 +4,7 @@ const userTextEl = document.getElementById("userText");
 const botTextEl = document.getElementById("botText");
 const languageSelectEl = document.getElementById("languageSelect");
 const languageHintEl = document.getElementById("languageHint");
+const voiceLabelEl = document.getElementById("voiceLabel");
 const voiceSelectEl = document.getElementById("voiceSelect");
 const voiceHintEl = document.getElementById("voiceHint");
 const latencySttModelEl = document.getElementById("latencySttModel");
@@ -25,6 +26,7 @@ const SILENCE_THRESHOLD = 0.015;
 const BROWSER_TTS_RATE = 1.14;
 const DEFAULT_LANGUAGE = "en";
 const DEFAULT_ENGLISH_VOICE = "en-US-Chirp3-HD-Kore";
+const DEFAULT_HEBREW_VOICE = "he-IL-Wavenet-C";
 const CHIRP3_HD_VOICE_GROUPS_EN = {
   female: [
     "Achernar",
@@ -140,8 +142,15 @@ function buildFallbackVoiceCatalog() {
     he: {
       key: "he",
       label: "Hebrew",
-      defaultVoice: "",
-      voices: [],
+      defaultVoice: DEFAULT_HEBREW_VOICE,
+      voices: [
+        {
+          id: DEFAULT_HEBREW_VOICE,
+          name: DEFAULT_HEBREW_VOICE,
+          gender: "default",
+          popular: false,
+        },
+      ],
     },
   };
 }
@@ -155,6 +164,17 @@ function getVoiceConfig(languageKey) {
 
 function setVoiceHint(languageKey) {
   if (!voiceHintEl) return;
+  if (voiceLabelEl) {
+    voiceLabelEl.textContent =
+      languageKey === "en" ? "Google Chirp 3 HD Voice (English)" : "Google Chirp Voice (Hebrew)";
+  }
+  if (voiceSelectEl) {
+    voiceSelectEl.setAttribute(
+      "aria-label",
+      languageKey === "en" ? "Select Google Chirp voice" : "Configured Google voice for Hebrew"
+    );
+  }
+
   if (languageKey === "en") {
     const selectedVoice = selectedVoiceByLanguage.en;
     if (selectedVoice) {
@@ -165,7 +185,13 @@ function setVoiceHint(languageKey) {
     voiceHintEl.textContent = "Select a Google Chirp 3 HD voice for tone testing.";
     return;
   }
-  voiceHintEl.textContent = "Chirp 3 HD list is enabled for English voice testing.";
+
+  const selectedVoice = selectedVoiceByLanguage[languageKey];
+  if (selectedVoice) {
+    voiceHintEl.textContent = `Voice: ${selectedVoice}. This voice is used for Hebrew replies.`;
+    return;
+  }
+  voiceHintEl.textContent = "Hebrew voice is configured on the server.";
 }
 
 function getSelectedVoice(languageKey) {
@@ -196,7 +222,7 @@ function populateVoiceSelect(languageKey) {
 
   voiceSelectEl.innerHTML = "";
 
-  if (languageKey !== "en" || voices.length === 0) {
+  if (voices.length === 0) {
     voiceSelectEl.disabled = true;
     const noneOption = document.createElement("option");
     noneOption.value = "";
@@ -217,23 +243,30 @@ function populateVoiceSelect(languageKey) {
   }
   selectedVoiceByLanguage[languageKey] = preferredVoice;
 
-  const femaleVoices = voices.filter((voice) => voice.gender === "female");
-  const maleVoices = voices.filter((voice) => voice.gender === "male");
+  const hasGenderGroups = voices.some((voice) => voice.gender === "female" || voice.gender === "male");
+  if (hasGenderGroups) {
+    const femaleVoices = voices.filter((voice) => voice.gender === "female");
+    const maleVoices = voices.filter((voice) => voice.gender === "male");
 
-  const groups = [
-    { label: "Female", list: femaleVoices },
-    { label: "Male", list: maleVoices },
-  ];
+    const groups = [
+      { label: "Female", list: femaleVoices },
+      { label: "Male", list: maleVoices },
+    ];
 
-  groups.forEach(({ label, list }) => {
-    if (list.length === 0) return;
-    const group = document.createElement("optgroup");
-    group.label = label;
-    list.forEach((voice) => {
-      group.appendChild(createVoiceOptionElement(voice));
+    groups.forEach(({ label, list }) => {
+      if (list.length === 0) return;
+      const group = document.createElement("optgroup");
+      group.label = label;
+      list.forEach((voice) => {
+        group.appendChild(createVoiceOptionElement(voice));
+      });
+      voiceSelectEl.appendChild(group);
     });
-    voiceSelectEl.appendChild(group);
-  });
+  } else {
+    voices.forEach((voice) => {
+      voiceSelectEl.appendChild(createVoiceOptionElement(voice));
+    });
+  }
 
   voiceSelectEl.value = preferredVoice;
   setVoiceHint(languageKey);
@@ -674,9 +707,7 @@ if (voiceSelectEl) {
     const languageKey = sessionLanguage || getSelectedLanguageKey();
     selectedVoiceByLanguage[languageKey] = voiceSelectEl.value;
     setVoiceHint(languageKey);
-    if (languageKey === "en") {
-      updateStatus("Voice updated. Next response will use the selected Chirp 3 HD voice.");
-    }
+    updateStatus("Voice updated. Next response will use the selected voice.");
   });
 }
 

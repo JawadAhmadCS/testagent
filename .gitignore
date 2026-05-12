@@ -1,3 +1,4 @@
 .env
 gcp-service-account.json
 .vercel
+git 
