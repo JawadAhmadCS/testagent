@@ -70,8 +70,12 @@ const TRANSCRIBE_MODEL = process.env.TRANSCRIBE_MODEL || "gpt-4o-transcribe";
 const DEFAULT_LLM_MODEL = process.env.DEFAULT_LLM_MODEL || "gpt-4o";
 const FAST_LLM_MODEL = process.env.FAST_LLM_MODEL || "gpt-4o-mini";
 const FAST_RESPONSE_MODE = process.env.FAST_RESPONSE_MODE !== "0";
-const FAST_MAX_TOKENS = Number(process.env.FAST_MAX_TOKENS || 160);
-const FAST_MAX_TOKENS_HE = Number(process.env.FAST_MAX_TOKENS_HE || 120);
+const FAST_MAX_TOKENS = Number(process.env.FAST_MAX_TOKENS || 80);
+const FAST_MAX_TOKENS_HE = Number(process.env.FAST_MAX_TOKENS_HE || 60);
+const FAST_HISTORY_LIMIT = Number(process.env.FAST_HISTORY_LIMIT || 6);
+const DEFAULT_HISTORY_LIMIT = Number(process.env.DEFAULT_HISTORY_LIMIT || 12);
+const OPENAI_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS || 12000);
+const GOOGLE_TTS_TIMEOUT_MS = Number(process.env.GOOGLE_TTS_TIMEOUT_MS || 12000);
 const DEFAULT_LANGUAGE = "en";
 const HEBREW_REGEX = /[\u0590-\u05FF]/g;
 const LATIN_REGEX = /[A-Za-z]/g;
@@ -359,6 +363,7 @@ async function transcribeWithOpenAI(audioBuffer, mimeType, languageConfig) {
     headers: {
       Authorization: `Bearer ${OPENAI_API_KEY}`,
     },
+    signal: AbortSignal.timeout(OPENAI_TIMEOUT_MS),
     body: formData,
   });
 
@@ -371,7 +376,7 @@ async function transcribeWithOpenAI(audioBuffer, mimeType, languageConfig) {
   return data.text?.trim() || "";
 }
 
-function normalizeHistory(historyInput, languageConfig) {
+function normalizeHistory(historyInput, languageConfig, historyLimit = DEFAULT_HISTORY_LIMIT) {
   if (!Array.isArray(historyInput)) return [];
 
   return historyInput
@@ -382,7 +387,7 @@ function normalizeHistory(historyInput, languageConfig) {
         typeof item.content === "string" &&
         item.content.trim().length > 0
     )
-    .slice(-12)
+    .slice(-Math.max(0, Number(historyLimit) || DEFAULT_HISTORY_LIMIT))
     .map((item) => ({ role: item.role, content: item.content.trim() }))
     .filter((item) => {
       if (item.role === "user") return true;
@@ -391,19 +396,26 @@ function normalizeHistory(historyInput, languageConfig) {
     });
 }
 
-async function requestChatCompletion(messages, model, temperature, maxTokens) {
+async function requestChatCompletion(messages, model, temperature, maxTokens, timeoutMs = OPENAI_TIMEOUT_MS) {
+  const payload = {
+    model,
+    messages,
+    max_completion_tokens: maxTokens,
+  };
+
+  // GPT-5 family enforces default temperature behavior in chat.completions.
+  if (!String(model || "").toLowerCase().startsWith("gpt-5")) {
+    payload.temperature = temperature;
+  }
+
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${OPENAI_API_KEY}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      model,
-      messages,
-      temperature,
-      max_tokens: maxTokens,
-    }),
+    signal: AbortSignal.timeout(timeoutMs),
+    body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
@@ -439,7 +451,8 @@ async function rewriteReplyToLanguage(rawReply, languageConfig, fast) {
 
 async function chatWithOpenAI(userText, historyInput, languageConfig, options = {}) {
   const fast = Boolean(options.fast);
-  const history = normalizeHistory(historyInput, languageConfig);
+  const historyLimit = fast ? FAST_HISTORY_LIMIT : DEFAULT_HISTORY_LIMIT;
+  const history = normalizeHistory(historyInput, languageConfig, historyLimit);
   const isFirstTurn = history.length === 0;
   const model = fast ? FAST_LLM_MODEL : DEFAULT_LLM_MODEL;
   const fastMaxTokens = languageConfig?.key === "he" ? FAST_MAX_TOKENS_HE : FAST_MAX_TOKENS;
@@ -522,6 +535,7 @@ async function synthesizeWithGoogleAccessToken(accessToken, text, languageConfig
   const response = await fetch(GOOGLE_TTS_ENDPOINT, {
     method: "POST",
     headers,
+    signal: AbortSignal.timeout(GOOGLE_TTS_TIMEOUT_MS),
     body: JSON.stringify({
       input: { text },
       voice: {

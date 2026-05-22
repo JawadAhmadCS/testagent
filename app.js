@@ -18,13 +18,14 @@ const API_BASE = window.location.origin;
 
 const ULTRA_FAST_MODE = true;
 const MAX_HISTORY_MESSAGES = 8;
-const MIN_RECORD_MS = 260;
+const MIN_RECORD_MS = 220;
 const SILENCE_STOP_MS = 220;
-const NO_SPEECH_STOP_MS = 1400;
-const MAX_RECORD_MS = 5200;
+const NO_SPEECH_STOP_MS = 900;
+const MAX_RECORD_MS = 4500;
 const SILENCE_THRESHOLD = 0.015;
 const BARGE_IN_TRIGGER_MS = 220;
 const BROWSER_TTS_RATE = 1.14;
+const MEDIA_RECORDER_AUDIO_BPS = 24000;
 const DEFAULT_LANGUAGE = "en";
 const DEFAULT_ENGLISH_VOICE = "en-US-Chirp3-HD-Kore";
 const DEFAULT_HEBREW_VOICES = [
@@ -486,9 +487,10 @@ async function ensureAudioReady() {
 
   if (!mediaRecorder) {
     const mimeType = getSupportedMimeType();
-    mediaRecorder = mimeType
-      ? new MediaRecorder(mediaStream, { mimeType })
-      : new MediaRecorder(mediaStream);
+    const recorderOptions = mimeType
+      ? { mimeType, audioBitsPerSecond: MEDIA_RECORDER_AUDIO_BPS }
+      : { audioBitsPerSecond: MEDIA_RECORDER_AUDIO_BPS };
+    mediaRecorder = new MediaRecorder(mediaStream, recorderOptions);
 
     mediaRecorder.ondataavailable = (event) => {
       if (event.data.size > 0) chunks.push(event.data);
@@ -518,8 +520,11 @@ async function ensureAudioReady() {
         formData.append("audio", audioBlob, "speech.webm");
         formData.append("history", JSON.stringify(conversation));
         const shouldUseFast = ULTRA_FAST_MODE;
+        // Keep Hebrew on server TTS even in ultra-fast mode because browser Hebrew voices are inconsistent.
+        const shouldUseServerTts =
+          shouldPreferServerTts(sessionLanguage) && (!shouldUseFast || sessionLanguage === "he");
         formData.append("fast", shouldUseFast ? "1" : "0");
-        formData.append("useServerTts", shouldPreferServerTts(sessionLanguage) ? "1" : "0");
+        formData.append("useServerTts", shouldUseServerTts ? "1" : "0");
         formData.append("language", getLanguageConfig(sessionLanguage).sttCode);
         const selectedVoice = getSelectedVoice(sessionLanguage);
         if (selectedVoice) {
