@@ -18,11 +18,12 @@ const API_BASE = window.location.origin;
 
 const ULTRA_FAST_MODE = true;
 const MAX_HISTORY_MESSAGES = 8;
-const MIN_RECORD_MS = 380;
-const SILENCE_STOP_MS = 320;
-const NO_SPEECH_STOP_MS = 2500;
-const MAX_RECORD_MS = 7000;
+const MIN_RECORD_MS = 260;
+const SILENCE_STOP_MS = 220;
+const NO_SPEECH_STOP_MS = 1400;
+const MAX_RECORD_MS = 5200;
 const SILENCE_THRESHOLD = 0.015;
+const BARGE_IN_TRIGGER_MS = 220;
 const BROWSER_TTS_RATE = 1.14;
 const DEFAULT_LANGUAGE = "en";
 const DEFAULT_ENGLISH_VOICE = "en-US-Chirp3-HD-Kore";
@@ -97,12 +98,17 @@ let isProcessing = false;
 let sessionActive = false;
 let activeAudio = null;
 let activeUtterance = null;
+let activeVoiceRequestController = null;
+let pendingPlaybackResolve = null;
 let sessionLanguage = DEFAULT_LANGUAGE;
 let voiceCatalog = null;
 const selectedVoiceByLanguage = {};
 
 let silenceIntervalId = null;
 let maxRecordTimerId = null;
+let bargeInIntervalId = null;
+let bargeInVoiceStartedAt = 0;
+let isHandlingBargeIn = false;
 let recordingStartedAt = 0;
 let lastVoiceAt = 0;
 let speechDetected = false;
@@ -399,6 +405,64 @@ window.addEventListener("unhandledrejection", (event) => {
   });
 });
 
+function interruptCurrentTurn() {
+  if (activeVoiceRequestController) {
+    activeVoiceRequestController.abort();
+    activeVoiceRequestController = null;
+  }
+  stopPlaybackIfAny();
+}
+
+function stopBargeInWatch() {
+  if (bargeInIntervalId) {
+    clearInterval(bargeInIntervalId);
+    bargeInIntervalId = null;
+  }
+  bargeInVoiceStartedAt = 0;
+}
+
+async function handleBargeInDetected() {
+  if (!sessionActive || !isProcessing || isRecording || isHandlingBargeIn) return;
+
+  isHandlingBargeIn = true;
+  try {
+    updateStatus("Heard you. Interrupting current response...");
+    interruptCurrentTurn();
+    await startListeningTurn({ allowDuringProcessing: true });
+  } finally {
+    isHandlingBargeIn = false;
+  }
+}
+
+function startBargeInWatch() {
+  if (bargeInIntervalId) return;
+
+  bargeInIntervalId = setInterval(() => {
+    if (!sessionActive || !isProcessing || isRecording || !analyserNode) {
+      bargeInVoiceStartedAt = 0;
+      return;
+    }
+
+    const rms = detectSpeechRms();
+    const now = Date.now();
+
+    if (rms > SILENCE_THRESHOLD) {
+      if (!bargeInVoiceStartedAt) {
+        bargeInVoiceStartedAt = now;
+        return;
+      }
+
+      if (now - bargeInVoiceStartedAt >= BARGE_IN_TRIGGER_MS) {
+        bargeInVoiceStartedAt = 0;
+        handleBargeInDetected();
+      }
+      return;
+    }
+
+    bargeInVoiceStartedAt = 0;
+  }, 80);
+}
+
 async function ensureAudioReady() {
   if (!mediaStream) {
     mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -439,7 +503,7 @@ async function ensureAudioReady() {
 
         if (audioBlob.size < 1200) {
           updateStatus("I did not hear clear speech. Speak again...");
-          await startListeningTurn();
+          await startListeningTurn({ allowDuringProcessing: true });
           return;
         }
 
@@ -449,18 +513,30 @@ async function ensureAudioReady() {
         const formData = new FormData();
         formData.append("audio", audioBlob, "speech.webm");
         formData.append("history", JSON.stringify(conversation));
-        const shouldUseFast = ULTRA_FAST_MODE && !shouldPreferServerTts(sessionLanguage);
+        const shouldUseFast = ULTRA_FAST_MODE;
         formData.append("fast", shouldUseFast ? "1" : "0");
+        formData.append("useServerTts", shouldPreferServerTts(sessionLanguage) ? "1" : "0");
         formData.append("language", getLanguageConfig(sessionLanguage).sttCode);
         const selectedVoice = getSelectedVoice(sessionLanguage);
         if (selectedVoice) {
           formData.append("voice", selectedVoice);
         }
 
-        const response = await fetch(`${API_BASE}/api/voice`, {
-          method: "POST",
-          body: formData,
-        });
+        const requestController = new AbortController();
+        activeVoiceRequestController = requestController;
+
+        let response;
+        try {
+          response = await fetch(`${API_BASE}/api/voice`, {
+            method: "POST",
+            body: formData,
+            signal: requestController.signal,
+          });
+        } finally {
+          if (activeVoiceRequestController === requestController) {
+            activeVoiceRequestController = null;
+          }
+        }
 
         const data = await parseJsonFromResponse(response);
         if (!response.ok) {
@@ -482,6 +558,10 @@ async function ensureAudioReady() {
         await speakAssistantResponse(data);
         restartListening = sessionActive;
       } catch (error) {
+        if (error?.name === "AbortError") {
+          return;
+        }
+
         console.error(error);
         await reportClientError({
           source: "voice-onstop",
@@ -491,7 +571,7 @@ async function ensureAudioReady() {
         updateStatus(`Error: ${error.message}`);
       } finally {
         isProcessing = false;
-        if (restartListening && sessionActive) {
+        if (restartListening && sessionActive && !isRecording) {
           await startListeningTurn();
         }
       }
@@ -561,8 +641,10 @@ function startSilenceWatch() {
   }, MAX_RECORD_MS);
 }
 
-async function startListeningTurn() {
-  if (!sessionActive || isProcessing || isRecording) return;
+async function startListeningTurn(options = {}) {
+  const allowDuringProcessing = Boolean(options.allowDuringProcessing);
+  if (!sessionActive || isRecording) return;
+  if (isProcessing && !allowDuringProcessing) return;
 
   await ensureAudioReady();
 
@@ -578,6 +660,12 @@ async function startListeningTurn() {
 }
 
 function stopPlaybackIfAny() {
+  if (pendingPlaybackResolve) {
+    const resolve = pendingPlaybackResolve;
+    pendingPlaybackResolve = null;
+    resolve();
+  }
+
   if ("speechSynthesis" in window) {
     window.speechSynthesis.cancel();
   }
@@ -598,12 +686,23 @@ async function speakWithBrowser(text, languageKey) {
   const languageCfg = getLanguageConfig(languageKey);
 
   await new Promise((resolve) => {
+    pendingPlaybackResolve = resolve;
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.rate = BROWSER_TTS_RATE;
     utterance.pitch = 1;
     utterance.lang = languageCfg.speechSynthesisLang;
-    utterance.onend = resolve;
-    utterance.onerror = resolve;
+    utterance.onend = () => {
+      if (pendingPlaybackResolve === resolve) {
+        pendingPlaybackResolve = null;
+      }
+      resolve();
+    };
+    utterance.onerror = () => {
+      if (pendingPlaybackResolve === resolve) {
+        pendingPlaybackResolve = null;
+      }
+      resolve();
+    };
     activeUtterance = utterance;
     window.speechSynthesis.speak(utterance);
   });
@@ -623,11 +722,29 @@ async function playAssistantAudio(audioBase64, audioMime) {
   try {
     await audio.play();
     await new Promise((resolve) => {
-      audio.onended = resolve;
-      audio.onerror = resolve;
+      pendingPlaybackResolve = resolve;
+      audio.onended = () => {
+        if (pendingPlaybackResolve === resolve) {
+          pendingPlaybackResolve = null;
+        }
+        resolve();
+      };
+      audio.onerror = () => {
+        if (pendingPlaybackResolve === resolve) {
+          pendingPlaybackResolve = null;
+        }
+        resolve();
+      };
+      audio.onpause = () => {
+        if (pendingPlaybackResolve === resolve) {
+          pendingPlaybackResolve = null;
+        }
+        resolve();
+      };
     });
   } finally {
     activeAudio = null;
+    pendingPlaybackResolve = null;
   }
 }
 
@@ -653,6 +770,8 @@ async function startSession() {
 
   sessionLanguage = getSelectedLanguageKey();
   sessionActive = true;
+  await ensureAudioReady();
+  startBargeInWatch();
   setLanguageLock(true);
   micButton.classList.add("recording");
   updateStatus(`Live mode ON (${getLanguageConfig(sessionLanguage).uiLabel}). Speak naturally...`);
@@ -662,7 +781,9 @@ async function startSession() {
 function stopSession() {
   sessionActive = false;
   isProcessing = false;
+  interruptCurrentTurn();
   stopCurrentRecording();
+  stopBargeInWatch();
   stopPlaybackIfAny();
   micButton.classList.remove("recording");
   setLanguageLock(false);

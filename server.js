@@ -57,6 +57,7 @@ const DEFAULT_LLM_MODEL = process.env.DEFAULT_LLM_MODEL || "gpt-4o";
 const FAST_LLM_MODEL = process.env.FAST_LLM_MODEL || "gpt-4o-mini";
 const FAST_RESPONSE_MODE = process.env.FAST_RESPONSE_MODE !== "0";
 const FAST_MAX_TOKENS = Number(process.env.FAST_MAX_TOKENS || 160);
+const FAST_MAX_TOKENS_HE = Number(process.env.FAST_MAX_TOKENS_HE || 120);
 const DEFAULT_LANGUAGE = "en";
 const HEBREW_REGEX = /[\u0590-\u05FF]/g;
 const LATIN_REGEX = /[A-Za-z]/g;
@@ -137,6 +138,18 @@ const LANGUAGE_CONFIG = {
     chirpLanguageCode: "he-IL",
     chirpVoice: CHIRP_VOICE_HE,
   },
+};
+
+const GOOGLE_AUTH_OPTIONS = {
+  scopes: ["https://www.googleapis.com/auth/cloud-platform"],
+};
+if (GOOGLE_CREDENTIALS) {
+  GOOGLE_AUTH_OPTIONS.credentials = GOOGLE_CREDENTIALS;
+}
+const GOOGLE_AUTH_CLIENT = new GoogleAuth(GOOGLE_AUTH_OPTIONS);
+let googleAuthTokenCache = {
+  token: null,
+  expiresAtMs: 0,
 };
 
 function resolveRequestedChirpVoice(languageKey, requestedVoice, fallbackVoice) {
@@ -220,6 +233,25 @@ function getLanguageScriptRule(languageConfig) {
 }
 
 function buildHeimishSystemPrompt(languageConfig, { fast, isFirstTurn }) {
+  if (fast) {
+    const openingLine = "Heimish Sushi, hello. How can I help you?";
+    const firstTurnRule = isFirstTurn
+      ? `First turn only: reply exactly "${openingLine}"`
+      : "Do not repeat the opening line.";
+    const scriptRule = getLanguageScriptRule(languageConfig);
+
+    return `
+You are Heimish Sushi's call assistant.
+Reply only in ${languageConfig.label}. ${scriptRule}
+${firstTurnRule}
+Keep the reply natural and very short (one sentence, max two).
+Ask only one next question.
+Never mention AI or internal logic.
+If reply would be in the wrong script, output this fallback:
+${getHardLanguageFallback(languageConfig)}
+`.trim();
+  }
+
   const scriptRule = getLanguageScriptRule(languageConfig);
   const openingLine = "Heimish Sushi, hello. How can I help you?";
 
@@ -437,6 +469,7 @@ async function chatWithOpenAI(userText, historyInput, languageConfig, options = 
   const history = normalizeHistory(historyInput, languageConfig);
   const isFirstTurn = history.length === 0;
   const model = fast ? FAST_LLM_MODEL : DEFAULT_LLM_MODEL;
+  const fastMaxTokens = languageConfig?.key === "he" ? FAST_MAX_TOKENS_HE : FAST_MAX_TOKENS;
   const systemPrompt = buildHeimishSystemPrompt(languageConfig, { fast, isFirstTurn });
 
   const rawReply = await requestChatCompletion(
@@ -447,11 +480,11 @@ async function chatWithOpenAI(userText, historyInput, languageConfig, options = 
     ],
     model,
     fast ? 0.2 : 0.3,
-    fast ? FAST_MAX_TOKENS : 180
+    fast ? fastMaxTokens : 180
   );
 
   let finalReply = rawReply || getHardLanguageFallback(languageConfig);
-  if (!isTextInLanguage(finalReply, languageConfig)) {
+  if (!fast && !isTextInLanguage(finalReply, languageConfig)) {
     console.error(
       `[language-guard] Off-language reply detected for ${languageConfig.key}. Rewriting response.`
     );
@@ -475,21 +508,35 @@ async function chatWithOpenAI(userText, historyInput, languageConfig, options = 
 }
 
 async function synthesizeWithGoogleChirp(text, languageConfig, voiceName) {
-  const authOptions = {
-    scopes: ["https://www.googleapis.com/auth/cloud-platform"],
-  };
-  if (GOOGLE_CREDENTIALS) {
-    authOptions.credentials = GOOGLE_CREDENTIALS;
+  const now = Date.now();
+  if (googleAuthTokenCache.token && now < googleAuthTokenCache.expiresAtMs - 60_000) {
+    return synthesizeWithGoogleAccessToken(
+      googleAuthTokenCache.token,
+      text,
+      languageConfig,
+      voiceName
+    );
   }
-  const auth = new GoogleAuth(authOptions);
 
-  const client = await auth.getClient();
+  const client = await GOOGLE_AUTH_CLIENT.getClient();
   const tokenResult = await client.getAccessToken();
   const accessToken = typeof tokenResult === "string" ? tokenResult : tokenResult?.token;
 
   if (!accessToken) {
     throw new Error("Could not get Google access token.");
   }
+
+  const expiryFromClient = Number(client?.credentials?.expiry_date || 0);
+  const fallbackExpiry = now + 45 * 60 * 1000;
+  googleAuthTokenCache = {
+    token: accessToken,
+    expiresAtMs: Number.isFinite(expiryFromClient) && expiryFromClient > now ? expiryFromClient : fallbackExpiry,
+  };
+
+  return synthesizeWithGoogleAccessToken(accessToken, text, languageConfig, voiceName);
+}
+
+async function synthesizeWithGoogleAccessToken(accessToken, text, languageConfig, voiceName) {
 
   const headers = {
     Authorization: `Bearer ${accessToken}`,
@@ -601,6 +648,10 @@ app.post("/api/voice", upload.single("audio"), async (req, res) => {
 
     const fastParam = typeof req.body?.fast === "string" ? req.body.fast.trim() : "";
     const preferFast = fastParam === "1" ? true : fastParam === "0" ? false : FAST_RESPONSE_MODE;
+    const useServerTtsParam =
+      typeof req.body?.useServerTts === "string" ? req.body.useServerTts.trim() : "";
+    const useServerTts =
+      useServerTtsParam === "1" ? true : useServerTtsParam === "0" ? false : !preferFast;
     const llmModelUsed = preferFast ? FAST_LLM_MODEL : DEFAULT_LLM_MODEL;
     const chirpAvailable = Boolean(selectedChirpVoice);
 
@@ -611,7 +662,7 @@ app.post("/api/voice", upload.single("audio"), async (req, res) => {
     let audioBase64 = null;
     let audioMime = null;
     let ttsMs = 0;
-    let fastTts = preferFast || !chirpAvailable;
+    let fastTts = !useServerTts || !chirpAvailable;
     let ttsModelUsed = fastTts ? null : selectedChirpVoice;
 
     if (!fastTts) {
