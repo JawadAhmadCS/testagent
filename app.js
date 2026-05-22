@@ -27,7 +27,13 @@ const BARGE_IN_TRIGGER_MS = 220;
 const BROWSER_TTS_RATE = 1.14;
 const DEFAULT_LANGUAGE = "en";
 const DEFAULT_ENGLISH_VOICE = "en-US-Chirp3-HD-Kore";
-const DEFAULT_HEBREW_VOICE = "he-IL-Wavenet-C";
+const DEFAULT_HEBREW_VOICES = [
+  "he-IL-Wavenet-C",
+  "he-IL-Wavenet-A",
+  "he-IL-Wavenet-B",
+  "he-IL-Wavenet-D",
+];
+const DEFAULT_HEBREW_VOICE = DEFAULT_HEBREW_VOICES[0];
 const CHIRP3_HD_VOICE_GROUPS_EN = {
   female: [
     "Achernar",
@@ -149,14 +155,12 @@ function buildFallbackVoiceCatalog() {
       key: "he",
       label: "Hebrew",
       defaultVoice: DEFAULT_HEBREW_VOICE,
-      voices: [
-        {
-          id: DEFAULT_HEBREW_VOICE,
-          name: DEFAULT_HEBREW_VOICE,
-          gender: "default",
-          popular: false,
-        },
-      ],
+      voices: DEFAULT_HEBREW_VOICES.map((id) => ({
+        id,
+        name: id,
+        gender: "default",
+        popular: id === DEFAULT_HEBREW_VOICE,
+      })),
     },
   };
 }
@@ -197,7 +201,7 @@ function setVoiceHint(languageKey) {
     voiceHintEl.textContent = `Voice: ${selectedVoice}. This voice is used for Hebrew replies.`;
     return;
   }
-  voiceHintEl.textContent = "Hebrew voice is configured on the server.";
+  voiceHintEl.textContent = "Select a Hebrew Google voice for replies.";
 }
 
 function getSelectedVoice(languageKey) {

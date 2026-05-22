@@ -18,6 +18,8 @@ Copy-Item .env.example .env
 - For Google TTS also set:
   - `GOOGLE_CLOUD_PROJECT_ID`
   - `GOOGLE_SERVICE_ACCOUNT_B64`
+- Optional for Hebrew voice dropdown:
+  - `CHIRP_VOICES_HE` (comma-separated list of Hebrew Google voice IDs)
 
 4. Install dependencies:
 ```powershell

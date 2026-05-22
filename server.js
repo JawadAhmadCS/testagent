@@ -50,7 +50,20 @@ const GOOGLE_CREDENTIALS = resolveGoogleCredentialsFromEnv();
 const GOOGLE_AUTH_SOURCE = GOOGLE_CREDENTIALS ? "env-inline" : "google-application-credentials";
 const GOOGLE_CLOUD_PROJECT_ID = process.env.GOOGLE_CLOUD_PROJECT_ID || GOOGLE_CREDENTIALS?.project_id;
 const CHIRP_VOICE_EN = process.env.CHIRP_VOICE_EN || process.env.CHIRP_VOICE || "en-US-Chirp3-HD-Kore";
-const CHIRP_VOICE_HE = process.env.CHIRP_VOICE_HE || "he-IL-Wavenet-C";
+const DEFAULT_HEBREW_VOICE_IDS = [
+  "he-IL-Wavenet-C",
+  "he-IL-Wavenet-A",
+  "he-IL-Wavenet-B",
+  "he-IL-Wavenet-D",
+];
+const parseVoiceList = (value) =>
+  String(value || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+const CHIRP_VOICES_HE = parseVoiceList(process.env.CHIRP_VOICES_HE);
+const CHIRP_VOICE_HE = process.env.CHIRP_VOICE_HE || CHIRP_VOICES_HE[0] || DEFAULT_HEBREW_VOICE_IDS[0];
+const HEBREW_VOICE_IDS = Array.from(new Set([CHIRP_VOICE_HE, ...CHIRP_VOICES_HE, ...DEFAULT_HEBREW_VOICE_IDS]));
 const GOOGLE_TTS_ENDPOINT =
   process.env.GOOGLE_TTS_ENDPOINT || "https://texttospeech.googleapis.com/v1/text:synthesize";
 const TRANSCRIBE_MODEL = process.env.TRANSCRIBE_MODEL || "gpt-4o-transcribe";
@@ -121,6 +134,20 @@ const CHIRP3_HD_VOICE_ID_SET_EN = new Set(CHIRP3_HD_VOICES_EN.map((voice) => voi
 const CHIRP3_HD_VOICE_NAME_TO_ID_EN = new Map(
   CHIRP3_HD_VOICES_EN.map((voice) => [voice.name.toLowerCase(), voice.id])
 );
+const HEBREW_TTS_VOICES = HEBREW_VOICE_IDS.map((id) => ({
+  id,
+  name: id,
+  gender: "default",
+  popular: id === CHIRP_VOICE_HE,
+}));
+const CHIRP_VOICE_ID_SET_BY_LANGUAGE = {
+  en: CHIRP3_HD_VOICE_ID_SET_EN,
+  he: new Set(HEBREW_TTS_VOICES.map((voice) => voice.id)),
+};
+const CHIRP_VOICE_NAME_TO_ID_BY_LANGUAGE = {
+  en: CHIRP3_HD_VOICE_NAME_TO_ID_EN,
+  he: new Map(HEBREW_TTS_VOICES.map((voice) => [voice.name.toLowerCase(), voice.id])),
+};
 
 const LANGUAGE_CONFIG = {
   en: {
@@ -161,20 +188,19 @@ try {
 }
 
 function resolveRequestedChirpVoice(languageKey, requestedVoice, fallbackVoice) {
-  if (languageKey !== "en") {
-    return fallbackVoice;
-  }
-
   const raw = typeof requestedVoice === "string" ? requestedVoice.trim() : "";
   if (!raw) {
     return fallbackVoice;
   }
 
-  if (CHIRP3_HD_VOICE_ID_SET_EN.has(raw)) {
+  const idSet = CHIRP_VOICE_ID_SET_BY_LANGUAGE[languageKey];
+  const nameToId = CHIRP_VOICE_NAME_TO_ID_BY_LANGUAGE[languageKey];
+
+  if (idSet?.has(raw)) {
     return raw;
   }
 
-  const byName = CHIRP3_HD_VOICE_NAME_TO_ID_EN.get(raw.toLowerCase());
+  const byName = nameToId?.get(raw.toLowerCase());
   if (byName) {
     return byName;
   }
@@ -539,14 +565,7 @@ app.get("/api/voices", (_req, res) => {
         key: "he",
         label: LANGUAGE_CONFIG.he.label,
         defaultVoice: LANGUAGE_CONFIG.he.chirpVoice,
-        voices: [
-          {
-            id: LANGUAGE_CONFIG.he.chirpVoice,
-            name: LANGUAGE_CONFIG.he.chirpVoice,
-            gender: "default",
-            popular: false,
-          },
-        ],
+        voices: HEBREW_TTS_VOICES,
       },
     },
   });
