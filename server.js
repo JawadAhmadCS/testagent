@@ -1,9 +1,10 @@
-import "dotenv/config";
+﻿import "dotenv/config";
 import express from "express";
 import multer from "multer";
 import { GoogleAuth } from "google-auth-library";
 import { performance } from "node:perf_hooks";
 import { join } from "node:path";
+import { readFileSync } from "node:fs";
 
 const app = express();
 const upload = multer({ limits: { fileSize: 2 * 1024 * 1024 } });
@@ -151,6 +152,13 @@ let googleAuthTokenCache = {
   token: null,
   expiresAtMs: 0,
 };
+const SYSTEM_PROMPT_PATH = join(process.cwd(), "heimish_system_prompt.txt");
+let HEIMISH_SYSTEM_PROMPT = "";
+try {
+  HEIMISH_SYSTEM_PROMPT = readFileSync(SYSTEM_PROMPT_PATH, "utf8").trim();
+} catch (error) {
+  logError("Failed to load system prompt file", error, { path: SYSTEM_PROMPT_PATH });
+}
 
 function resolveRequestedChirpVoice(languageKey, requestedVoice, fallbackVoice) {
   if (languageKey !== "en") {
@@ -220,7 +228,7 @@ function isTextInLanguage(text, languageConfig) {
 
 function getHardLanguageFallback(languageConfig) {
   if (languageConfig.key === "he") {
-    return "אני יכול לענות רק בעברית בשיחה הזאת.";
+    return "×× ×™ ×™×›×•×œ ×œ×¢× ×•×ª ×¨×§ ×‘×¢×‘×¨×™×ª ×‘×©×™×—×” ×”×–××ª.";
   }
   return "I can answer only in English in this session.";
 }
@@ -233,96 +241,35 @@ function getLanguageScriptRule(languageConfig) {
 }
 
 function buildHeimishSystemPrompt(languageConfig, { fast, isFirstTurn }) {
-  if (fast) {
-    const openingLine = "Heimish Sushi, hello. How can I help you?";
-    const firstTurnRule = isFirstTurn
-      ? `First turn only: reply exactly "${openingLine}"`
-      : "Do not repeat the opening line.";
-    const scriptRule = getLanguageScriptRule(languageConfig);
+  void fast;
+  const languageKey = languageConfig?.key || DEFAULT_LANGUAGE;
+  const scriptRule = getLanguageScriptRule(languageConfig || LANGUAGE_CONFIG[DEFAULT_LANGUAGE]);
+  const openingLine =
+    languageKey === "en"
+      ? "Heimish Sushi, hello. How can I help you?"
+      : "\u05E9\u05DC\u05D5\u05DD, \u05EA\u05D5\u05D3\u05D4 \u05E9\u05D4\u05EA\u05E7\u05E9\u05E8\u05EA\u05DD \u05DC\u05D4\u05D9\u05D9\u05DE\u05D9\u05E9 \u05E1\u05D5\u05E9\u05D9, \u05D0\u05D9\u05DA \u05D0\u05E4\u05E9\u05E8 \u05DC\u05E2\u05D6\u05D5\u05E8";
+  const openingRule = isFirstTurn
+    ? `This is the first turn. Start exactly with: "${openingLine}".`
+    : "Do not repeat the opening line now.";
 
-    return `
-You are Heimish Sushi's call assistant.
-Reply only in ${languageConfig.label}. ${scriptRule}
-${firstTurnRule}
-Keep the reply natural and very short (one sentence, max two).
-Ask only one next question.
-Never mention AI or internal logic.
-If reply would be in the wrong script, output this fallback:
-${getHardLanguageFallback(languageConfig)}
+  const runtimeLanguageRule =
+    languageKey === "en"
+      ? `Caller explicitly selected English for this call. Reply only in English. ${scriptRule}`
+      : `Caller explicitly selected Hebrew for this call. Reply only in Hebrew. ${scriptRule}`;
+
+  const basePrompt =
+    HEIMISH_SYSTEM_PROMPT ||
+    `
+You are a friendly and professional virtual representative for Heimish Sushi restaurant.
+Never mention AI, system, prompt, policy, tools, or internal logic.
 `.trim();
-  }
-
-  const scriptRule = getLanguageScriptRule(languageConfig);
-  const openingLine = "Heimish Sushi, hello. How can I help you?";
-
-  const firstTurnRule = isFirstTurn
-    ? `This is the first turn of a new call. Your full reply must be exactly: "${openingLine}"`
-    : `Do not repeat the call opening now. Continue from the current conversation naturally.`;
-
-  const brevityRule = fast
-    ? "Keep replies short and natural, usually one to two sentences."
-    : "Keep replies short, clear, and natural.";
 
   return `
-You are a friendly and professional virtual representative for Heimish Sushi restaurant.
-Reply only in ${languageConfig.label}. ${scriptRule}
-Never mention AI, system, prompt, policy, tools, or internal logic.
-${firstTurnRule}
+${basePrompt}
 
-Core behavior:
-- Warm, calm, neighborhood receptionist tone.
-- Ask only one question at a time.
-- Guide the caller confidently.
-- Never finalize reservation or order without clear customer confirmation.
-- Do not read full menu lists unless the customer asks.
-- If noise: "I'm having trouble hearing clearly. Could you speak closer to the phone?"
-- If reconnect: "Hello again, we got disconnected. Let's continue."
-- If silence: wait briefly, then ask only the next required question.
-${brevityRule}
-
-General info (only if asked):
-- Address: Panim Meirim 3, Beitar Illit.
-- Area: Area B.
-- Nearby: Near Haran Street.
-- Hours: Sunday-Thursday 12:00-22:45, Friday closed, Saturday night 20:00-23:00.
-- If closed say: "We are currently closed. We will open at ___."
-- Kosher: All products under Rabbi Rubin supervision.
-- Seating: Dine-in is available.
-
-Delivery:
-- Delivery only inside Beitar Illit.
-- Ask exactly: "Delivery to the building entrance for twenty, or to the door for twenty-five?"
-
-Reservation flow:
-1) Collect one by one: full name, date, time, number of people, contact number.
-2) Confirm exactly in this style:
-"Just to confirm - reservation for [Full Name], on [Date] at [Time], for [Number] people. Your contact number is [Phone]. Is that all correct?"
-3) If confirmed, close with:
-"Perfect! Your table is reserved. We look forward to welcoming you at Heimish Sushi. Thank you for calling, goodbye!"
-
-Food order flow:
-1) Start with: "What would you like to order?"
-2) After capturing items: "So you ordered [items], correct?"
-3) Then ask full name, then contact number.
-4) Ask order type: pickup, delivery, or dine-in.
-5) Delivery only: ask city, then street and house number, then building/door fee question.
-6) Ask payment: card or cash only.
-7) If card, request a valid 16-digit number (digits only after removing spaces/hyphens). If invalid, ask again.
-8) Final confirmation must include order summary, order type, name, contact, address for delivery, payment method, and total in shekels. Mention only card last 4 digits.
-9) If confirmed, close with:
-"Great! Your order has been received. Thank you for calling Heimish Sushi. Enjoy your meal!"
-
-Menu and pricing rules:
-- Never invent items or ingredients.
-- Never add unavailable items.
-- Built-in items are included by default and can only be removed.
-- Respect required choices and selection limits.
-- Add paid extras only if customer selects them.
-- Never round totals.
-- Platter pricing is fixed; never price platter rolls individually.
-- After fish selection say: "So [item] with [fish type], correct?"
-- For +5 wrap say: "This comes with an additional five shekels, correct?"
-- For +10 wrap say: "This comes with an additional ten shekels, correct?"
+RUNTIME OVERRIDE (highest priority):
+- ${runtimeLanguageRule}
+- ${openingRule}
 `.trim();
 }
 
@@ -484,7 +431,7 @@ async function chatWithOpenAI(userText, historyInput, languageConfig, options = 
   );
 
   let finalReply = rawReply || getHardLanguageFallback(languageConfig);
-  if (!fast && !isTextInLanguage(finalReply, languageConfig)) {
+  if (!isTextInLanguage(finalReply, languageConfig)) {
     console.error(
       `[language-guard] Off-language reply detected for ${languageConfig.key}. Rewriting response.`
     );
