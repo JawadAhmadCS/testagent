@@ -1,4 +1,4 @@
-﻿import "dotenv/config";
+import "dotenv/config";
 import express from "express";
 import multer from "multer";
 import { GoogleAuth } from "google-auth-library";
@@ -76,7 +76,10 @@ const FAST_HISTORY_LIMIT = Number(process.env.FAST_HISTORY_LIMIT || 6);
 const DEFAULT_HISTORY_LIMIT = Number(process.env.DEFAULT_HISTORY_LIMIT || 12);
 const OPENAI_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS || 12000);
 const GOOGLE_TTS_TIMEOUT_MS = Number(process.env.GOOGLE_TTS_TIMEOUT_MS || 12000);
-const DEFAULT_LANGUAGE = "en";
+const DEFAULT_TTS_RATE = 1;
+const DEFAULT_TTS_PITCH_SCALE = 1;
+const DEFAULT_TTS_VOLUME = 1;
+const DEFAULT_LANGUAGE = "he";
 const HEBREW_REGEX = /[\u0590-\u05FF]/g;
 const LATIN_REGEX = /[A-Za-z]/g;
 const CHIRP3_HD_VOICE_GROUPS_EN = {
@@ -212,6 +215,29 @@ function resolveRequestedChirpVoice(languageKey, requestedVoice, fallbackVoice) 
   return fallbackVoice;
 }
 
+function clampNumber(value, min, max, fallback) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.min(max, Math.max(min, num));
+}
+
+function parseTtsSettings(input) {
+  const rate = clampNumber(input?.ttsRate, 0.25, 2, DEFAULT_TTS_RATE);
+  const pitchScale = clampNumber(input?.ttsPitch, 0.5, 2, DEFAULT_TTS_PITCH_SCALE);
+  const volume = clampNumber(input?.ttsVolume, 0, 1, DEFAULT_TTS_VOLUME);
+  const googlePitch = clampNumber((pitchScale - 1) * 20, -20, 20, 0);
+  const volumeGainDb =
+    volume <= 0 ? -96 : clampNumber(20 * Math.log10(volume), -96, 16, 0);
+
+  return {
+    rate,
+    pitchScale,
+    volume,
+    googlePitch,
+    volumeGainDb,
+  };
+}
+
 function logError(label, error, context = null) {
   console.error(`\n[${new Date().toISOString()}] ${label}`);
   if (context) {
@@ -258,7 +284,7 @@ function isTextInLanguage(text, languageConfig) {
 
 function getHardLanguageFallback(languageConfig) {
   if (languageConfig.key === "he") {
-    return "×× ×™ ×™×›×•×œ ×œ×¢× ×•×ª ×¨×§ ×‘×¢×‘×¨×™×ª ×‘×©×™×—×” ×”×–××ª.";
+    return "אני יכול לענות רק בעברית בשיחה הזאת.";
   }
   return "I can answer only in English in this session.";
 }
@@ -493,14 +519,15 @@ async function chatWithOpenAI(userText, historyInput, languageConfig, options = 
   return finalReply;
 }
 
-async function synthesizeWithGoogleChirp(text, languageConfig, voiceName) {
+async function synthesizeWithGoogleChirp(text, languageConfig, voiceName, ttsSettings) {
   const now = Date.now();
   if (googleAuthTokenCache.token && now < googleAuthTokenCache.expiresAtMs - 60_000) {
     return synthesizeWithGoogleAccessToken(
       googleAuthTokenCache.token,
       text,
       languageConfig,
-      voiceName
+      voiceName,
+      ttsSettings
     );
   }
 
@@ -519,10 +546,22 @@ async function synthesizeWithGoogleChirp(text, languageConfig, voiceName) {
     expiresAtMs: Number.isFinite(expiryFromClient) && expiryFromClient > now ? expiryFromClient : fallbackExpiry,
   };
 
-  return synthesizeWithGoogleAccessToken(accessToken, text, languageConfig, voiceName);
+  return synthesizeWithGoogleAccessToken(
+    accessToken,
+    text,
+    languageConfig,
+    voiceName,
+    ttsSettings
+  );
 }
 
-async function synthesizeWithGoogleAccessToken(accessToken, text, languageConfig, voiceName) {
+async function synthesizeWithGoogleAccessToken(
+  accessToken,
+  text,
+  languageConfig,
+  voiceName,
+  ttsSettings
+) {
 
   const headers = {
     Authorization: `Bearer ${accessToken}`,
@@ -544,6 +583,9 @@ async function synthesizeWithGoogleAccessToken(accessToken, text, languageConfig
       },
       audioConfig: {
         audioEncoding: "MP3",
+        speakingRate: ttsSettings.rate,
+        pitch: ttsSettings.googlePitch,
+        volumeGainDb: ttsSettings.volumeGainDb,
       },
     }),
   });
@@ -628,10 +670,12 @@ app.post("/api/voice", upload.single("audio"), async (req, res) => {
 
     const fastParam = typeof req.body?.fast === "string" ? req.body.fast.trim() : "";
     const preferFast = fastParam === "1" ? true : fastParam === "0" ? false : FAST_RESPONSE_MODE;
+    const ttsEngineParam = typeof req.body?.ttsEngine === "string" ? req.body.ttsEngine.trim() : "";
     const useServerTtsParam =
       typeof req.body?.useServerTts === "string" ? req.body.useServerTts.trim() : "";
     const useServerTts =
       useServerTtsParam === "1" ? true : useServerTtsParam === "0" ? false : !preferFast;
+    const ttsSettings = parseTtsSettings(req.body);
     const llmModelUsed = preferFast ? FAST_LLM_MODEL : DEFAULT_LLM_MODEL;
     const chirpAvailable = Boolean(selectedChirpVoice);
 
@@ -648,7 +692,12 @@ app.post("/api/voice", upload.single("audio"), async (req, res) => {
     if (!fastTts) {
       try {
         const ttsStart = performance.now();
-        audioBase64 = await synthesizeWithGoogleChirp(reply, languageConfig, selectedChirpVoice);
+        audioBase64 = await synthesizeWithGoogleChirp(
+          reply,
+          languageConfig,
+          selectedChirpVoice,
+          ttsSettings
+        );
         ttsMs = Math.round(performance.now() - ttsStart);
         audioMime = "audio/mp3";
       } catch (ttsError) {
@@ -680,6 +729,13 @@ app.post("/api/voice", upload.single("audio"), async (req, res) => {
         transcribe: `${TRANSCRIBE_MODEL} (${languageConfig.sttCode})`,
         llm: `${llmModelUsed} (${languageConfig.key})`,
         tts: ttsModelUsed,
+      },
+      tts: {
+        engineRequested: ttsEngineParam || "auto",
+        engineUsed: fastTts ? "browser" : "server",
+        rate: ttsSettings.rate,
+        pitch: ttsSettings.pitchScale,
+        volume: ttsSettings.volume,
       },
       timings: {
         transcribeMs,

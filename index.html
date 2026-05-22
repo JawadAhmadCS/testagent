@@ -11,8 +11,8 @@
       <section class="language-panel">
         <label for="languageSelect">Conversation Language</label>
         <select id="languageSelect" aria-label="Select conversation language">
-          <option value="en" selected>English</option>
-          <option value="he">Hebrew</option>
+          <option value="en">English</option>
+          <option value="he" selected>Hebrew</option>
         </select>
         <small id="languageHint">Language locks for current live session.</small>
       </section>
@@ -21,6 +21,34 @@
         <label id="voiceLabel" for="voiceSelect">Google Chirp 3 HD Voice (English)</label>
         <select id="voiceSelect" aria-label="Select Google Chirp voice"></select>
         <small id="voiceHint">Select a Google Chirp 3 HD voice for tone testing.</small>
+      </section>
+      <section class="voice-controls-panel">
+        <label for="ttsEngineSelect">Voice Engine</label>
+        <select id="ttsEngineSelect" aria-label="Select voice engine">
+          <option value="auto" selected>Auto (Recommended)</option>
+          <option value="browser">Browser TTS</option>
+          <option value="server">Server TTS (Google)</option>
+        </select>
+
+        <div class="voice-control-row">
+          <label for="voiceSpeedRange">Speed</label>
+          <input id="voiceSpeedRange" type="range" min="0.5" max="2" step="0.05" value="1" />
+          <strong id="voiceSpeedValue">1.00x</strong>
+        </div>
+
+        <div class="voice-control-row">
+          <label for="voicePitchRange">Pitch</label>
+          <input id="voicePitchRange" type="range" min="0.5" max="2" step="0.05" value="1" />
+          <strong id="voicePitchValue">1.00x</strong>
+        </div>
+
+        <div class="voice-control-row">
+          <label for="voiceVolumeRange">Volume</label>
+          <input id="voiceVolumeRange" type="range" min="0" max="1" step="0.05" value="1" />
+          <strong id="voiceVolumeValue">100%</strong>
+        </div>
+
+        <small id="voiceControlsHint">Apply instantly on the next assistant reply.</small>
       </section>
 
       <button id="micButton" class="mic" aria-label="Start recording">

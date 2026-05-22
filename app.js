@@ -7,6 +7,14 @@ const languageHintEl = document.getElementById("languageHint");
 const voiceLabelEl = document.getElementById("voiceLabel");
 const voiceSelectEl = document.getElementById("voiceSelect");
 const voiceHintEl = document.getElementById("voiceHint");
+const ttsEngineSelectEl = document.getElementById("ttsEngineSelect");
+const voiceSpeedRangeEl = document.getElementById("voiceSpeedRange");
+const voiceSpeedValueEl = document.getElementById("voiceSpeedValue");
+const voicePitchRangeEl = document.getElementById("voicePitchRange");
+const voicePitchValueEl = document.getElementById("voicePitchValue");
+const voiceVolumeRangeEl = document.getElementById("voiceVolumeRange");
+const voiceVolumeValueEl = document.getElementById("voiceVolumeValue");
+const voiceControlsHintEl = document.getElementById("voiceControlsHint");
 const latencySttModelEl = document.getElementById("latencySttModel");
 const latencyLlmModelEl = document.getElementById("latencyLlmModel");
 const latencyTtsModelEl = document.getElementById("latencyTtsModel");
@@ -26,7 +34,14 @@ const SILENCE_THRESHOLD = 0.015;
 const BARGE_IN_TRIGGER_MS = 220;
 const BROWSER_TTS_RATE = 1.14;
 const MEDIA_RECORDER_AUDIO_BPS = 24000;
-const DEFAULT_LANGUAGE = "en";
+const VOICE_SETTINGS_STORAGE_KEY = "voice.settings.v1";
+const DEFAULT_VOICE_SETTINGS = Object.freeze({
+  engine: "auto",
+  rate: 1,
+  pitch: 1,
+  volume: 1,
+});
+const DEFAULT_LANGUAGE = "he";
 const DEFAULT_ENGLISH_VOICE = "en-US-Chirp3-HD-Kore";
 const DEFAULT_HEBREW_VOICES = [
   "he-IL-Wavenet-C",
@@ -125,9 +140,159 @@ let analyserNode = null;
 let sourceNode = null;
 
 const conversation = [];
+let voiceSettings = loadVoiceSettings();
 
 function getLanguageConfig(languageKey) {
   return LANGUAGE_CONFIG[languageKey] || LANGUAGE_CONFIG[DEFAULT_LANGUAGE];
+}
+
+function clampNumber(value, min, max, fallback) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.min(max, Math.max(min, num));
+}
+
+function formatVoiceMultiplier(value) {
+  return `${value.toFixed(2)}x`;
+}
+
+function formatVoiceVolume(value) {
+  return `${Math.round(value * 100)}%`;
+}
+
+function loadVoiceSettings() {
+  const fallback = { ...DEFAULT_VOICE_SETTINGS };
+
+  try {
+    const raw = localStorage.getItem(VOICE_SETTINGS_STORAGE_KEY);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw);
+    const engine = ["auto", "browser", "server"].includes(parsed?.engine)
+      ? parsed.engine
+      : fallback.engine;
+
+    return {
+      engine,
+      rate: clampNumber(parsed?.rate, 0.5, 2, fallback.rate),
+      pitch: clampNumber(parsed?.pitch, 0.5, 2, fallback.pitch),
+      volume: clampNumber(parsed?.volume, 0, 1, fallback.volume),
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function saveVoiceSettings() {
+  try {
+    localStorage.setItem(VOICE_SETTINGS_STORAGE_KEY, JSON.stringify(voiceSettings));
+  } catch {
+    // Ignore storage errors (private mode / quota) and continue with runtime values.
+  }
+}
+
+function syncVoiceControlsFromState() {
+  if (ttsEngineSelectEl) {
+    ttsEngineSelectEl.value = voiceSettings.engine;
+  }
+  if (voiceSpeedRangeEl) {
+    voiceSpeedRangeEl.value = String(voiceSettings.rate);
+  }
+  if (voiceSpeedValueEl) {
+    voiceSpeedValueEl.textContent = formatVoiceMultiplier(voiceSettings.rate);
+  }
+  if (voicePitchRangeEl) {
+    voicePitchRangeEl.value = String(voiceSettings.pitch);
+  }
+  if (voicePitchValueEl) {
+    voicePitchValueEl.textContent = formatVoiceMultiplier(voiceSettings.pitch);
+  }
+  if (voiceVolumeRangeEl) {
+    voiceVolumeRangeEl.value = String(voiceSettings.volume);
+  }
+  if (voiceVolumeValueEl) {
+    voiceVolumeValueEl.textContent = formatVoiceVolume(voiceSettings.volume);
+  }
+}
+
+function updateVoiceControlsHint(languageKey) {
+  if (!voiceControlsHintEl) return;
+
+  if (voiceSettings.engine === "browser") {
+    voiceControlsHintEl.textContent =
+      "Browser mode: speed, pitch, and volume apply directly in this browser.";
+    return;
+  }
+
+  if (voiceSettings.engine === "server") {
+    voiceControlsHintEl.textContent =
+      "Server mode: Google TTS applies speed, pitch, and volume for the selected voice.";
+    return;
+  }
+
+  if (languageKey === "he") {
+    voiceControlsHintEl.textContent =
+      "Auto mode: Hebrew prefers server voice for better reliability.";
+    return;
+  }
+
+  if (getSelectedVoice(languageKey)) {
+    voiceControlsHintEl.textContent =
+      "Auto mode: selected voice uses server TTS so male/female voice choice is preserved.";
+    return;
+  }
+
+  voiceControlsHintEl.textContent =
+    "Auto mode: uses best available engine and applies your settings on next reply.";
+}
+
+function updateVoiceControlAvailability(languageKey) {
+  if (!ttsEngineSelectEl) return;
+
+  const serverOption = Array.from(ttsEngineSelectEl.options).find(
+    (option) => option.value === "server"
+  );
+  const serverCapable = shouldPreferServerTts(languageKey);
+
+  if (serverOption) {
+    serverOption.disabled = !serverCapable;
+  }
+
+  if (!serverCapable && voiceSettings.engine === "server") {
+    voiceSettings.engine = "auto";
+    saveVoiceSettings();
+    syncVoiceControlsFromState();
+  }
+
+  updateVoiceControlsHint(languageKey);
+}
+
+function applyVoiceControlChange() {
+  if (ttsEngineSelectEl) {
+    voiceSettings.engine = ttsEngineSelectEl.value;
+  }
+  if (voiceSpeedRangeEl) {
+    voiceSettings.rate = clampNumber(voiceSpeedRangeEl.value, 0.5, 2, DEFAULT_VOICE_SETTINGS.rate);
+  }
+  if (voicePitchRangeEl) {
+    voiceSettings.pitch = clampNumber(
+      voicePitchRangeEl.value,
+      0.5,
+      2,
+      DEFAULT_VOICE_SETTINGS.pitch
+    );
+  }
+  if (voiceVolumeRangeEl) {
+    voiceSettings.volume = clampNumber(
+      voiceVolumeRangeEl.value,
+      0,
+      1,
+      DEFAULT_VOICE_SETTINGS.volume
+    );
+  }
+
+  saveVoiceSettings();
+  syncVoiceControlsFromState();
+  updateVoiceControlAvailability(sessionLanguage || getSelectedLanguageKey());
 }
 
 function getSelectedLanguageKey() {
@@ -217,6 +382,22 @@ function shouldPreferServerTts(languageKey) {
   return Boolean(getSelectedVoice(languageKey));
 }
 
+function resolveUseServerTtsForRequest(languageKey, shouldUseFast) {
+  if (voiceSettings.engine === "browser") return false;
+  if (voiceSettings.engine === "server") return true;
+
+  const hasSelectedVoice = Boolean(getSelectedVoice(languageKey));
+
+  // In auto mode, honor explicit voice choices (especially EN male/female Chirp voices).
+  if (hasSelectedVoice) return true;
+
+  // Hebrew remains server-first for reliability.
+  if (languageKey === "he") return true;
+
+  // For other cases keep ultra-fast browser preference unless fast mode is off.
+  return shouldPreferServerTts(languageKey) && !shouldUseFast;
+}
+
 function createVoiceOptionElement(voice) {
   const option = document.createElement("option");
   option.value = voice.id;
@@ -240,6 +421,7 @@ function populateVoiceSelect(languageKey) {
     noneOption.textContent = "No Chirp list for this language";
     voiceSelectEl.appendChild(noneOption);
     setVoiceHint(languageKey);
+    updateVoiceControlAvailability(languageKey);
     return;
   }
 
@@ -281,6 +463,7 @@ function populateVoiceSelect(languageKey) {
 
   voiceSelectEl.value = preferredVoice;
   setVoiceHint(languageKey);
+  updateVoiceControlAvailability(languageKey);
 }
 
 async function loadVoiceCatalog() {
@@ -520,11 +703,13 @@ async function ensureAudioReady() {
         formData.append("audio", audioBlob, "speech.webm");
         formData.append("history", JSON.stringify(conversation));
         const shouldUseFast = ULTRA_FAST_MODE;
-        // Keep Hebrew on server TTS even in ultra-fast mode because browser Hebrew voices are inconsistent.
-        const shouldUseServerTts =
-          shouldPreferServerTts(sessionLanguage) && (!shouldUseFast || sessionLanguage === "he");
+        const shouldUseServerTts = resolveUseServerTtsForRequest(sessionLanguage, shouldUseFast);
         formData.append("fast", shouldUseFast ? "1" : "0");
         formData.append("useServerTts", shouldUseServerTts ? "1" : "0");
+        formData.append("ttsEngine", voiceSettings.engine);
+        formData.append("ttsRate", String(voiceSettings.rate));
+        formData.append("ttsPitch", String(voiceSettings.pitch));
+        formData.append("ttsVolume", String(voiceSettings.volume));
         formData.append("language", getLanguageConfig(sessionLanguage).sttCode);
         const selectedVoice = getSelectedVoice(sessionLanguage);
         if (selectedVoice) {
@@ -686,7 +871,7 @@ function stopPlaybackIfAny() {
   activeAudio = null;
 }
 
-async function speakWithBrowser(text, languageKey) {
+async function speakWithBrowser(text, languageKey, settings = DEFAULT_VOICE_SETTINGS) {
   if (!text) return;
   if (!("speechSynthesis" in window)) return;
 
@@ -697,8 +882,9 @@ async function speakWithBrowser(text, languageKey) {
   await new Promise((resolve) => {
     pendingPlaybackResolve = resolve;
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = BROWSER_TTS_RATE;
-    utterance.pitch = 1;
+    utterance.rate = clampNumber(settings.rate, 0.1, 10, BROWSER_TTS_RATE);
+    utterance.pitch = clampNumber(settings.pitch, 0, 2, 1);
+    utterance.volume = clampNumber(settings.volume, 0, 1, 1);
     utterance.lang = languageCfg.speechSynthesisLang;
     utterance.onend = () => {
       if (pendingPlaybackResolve === resolve) {
@@ -719,13 +905,14 @@ async function speakWithBrowser(text, languageKey) {
   activeUtterance = null;
 }
 
-async function playAssistantAudio(audioBase64, audioMime) {
+async function playAssistantAudio(audioBase64, audioMime, settings = DEFAULT_VOICE_SETTINGS) {
   if (!audioBase64) return;
 
   stopPlaybackIfAny();
   updateStatus("Speaking...");
 
   const audio = new Audio(`data:${audioMime};base64,${audioBase64}`);
+  audio.volume = clampNumber(settings.volume, 0, 1, 1);
   activeAudio = audio;
 
   try {
@@ -758,15 +945,18 @@ async function playAssistantAudio(audioBase64, audioMime) {
 }
 
 async function speakAssistantResponse(data) {
+  const requestedBrowser = voiceSettings.engine === "browser";
+  const requestedServer = voiceSettings.engine === "server";
   const preferBrowser =
-    (!shouldPreferServerTts(sessionLanguage) && ULTRA_FAST_MODE) ||
+    requestedBrowser ||
+    (!requestedServer && !shouldPreferServerTts(sessionLanguage) && ULTRA_FAST_MODE) ||
     data.fastTts ||
     !data.audioBase64;
   if (preferBrowser) {
-    await speakWithBrowser(data.reply || "", sessionLanguage);
+    await speakWithBrowser(data.reply || "", sessionLanguage, voiceSettings);
     return;
   }
-  await playAssistantAudio(data.audioBase64, data.audioMime || "audio/mp3");
+  await playAssistantAudio(data.audioBase64, data.audioMime || "audio/mp3", voiceSettings);
 }
 
 async function startSession() {
@@ -837,6 +1027,7 @@ if (voiceSelectEl) {
     const languageKey = sessionLanguage || getSelectedLanguageKey();
     selectedVoiceByLanguage[languageKey] = voiceSelectEl.value;
     setVoiceHint(languageKey);
+    updateVoiceControlAvailability(languageKey);
     updateStatus("Voice updated. Next response will use the selected voice.");
   });
 }
@@ -846,9 +1037,40 @@ async function initializeVoiceSelector() {
   populateVoiceSelect(sessionLanguage);
 }
 
+function initializeVoiceControls() {
+  syncVoiceControlsFromState();
+  updateVoiceControlAvailability(sessionLanguage || getSelectedLanguageKey());
+
+  if (ttsEngineSelectEl) {
+    ttsEngineSelectEl.addEventListener("change", () => {
+      applyVoiceControlChange();
+      updateStatus("Voice engine updated. Next response will use it.");
+    });
+  }
+
+  if (voiceSpeedRangeEl) {
+    voiceSpeedRangeEl.addEventListener("input", () => {
+      applyVoiceControlChange();
+    });
+  }
+
+  if (voicePitchRangeEl) {
+    voicePitchRangeEl.addEventListener("input", () => {
+      applyVoiceControlChange();
+    });
+  }
+
+  if (voiceVolumeRangeEl) {
+    voiceVolumeRangeEl.addEventListener("input", () => {
+      applyVoiceControlChange();
+    });
+  }
+}
+
 sessionLanguage = getSelectedLanguageKey();
 setLanguageLock(false);
 updateLatencyCard(null);
 initializeVoiceSelector();
+initializeVoiceControls();
 
 micButton.addEventListener("click", toggleSession);
